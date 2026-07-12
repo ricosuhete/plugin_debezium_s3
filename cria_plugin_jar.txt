@@ -1,0 +1,95 @@
+## Cria pastas
+mkdir -p ~/topic-path-partitioner/src/main/java/br/com/dio/connect/partitioner
+
+# ===============================================================
+# ===============================================================
+# ===============================================================
+
+## Cria arquivo pom.xml
+cat > ~/topic-path-partitioner/pom.xml << 'EOF'
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>br.com.dio</groupId>
+    <artifactId>topic-path-partitioner</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>confluent</id>
+            <url>https://packages.confluent.io/maven/</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>connect-api</artifactId>
+            <version>3.9.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.confluent</groupId>
+            <artifactId>kafka-connect-storage-partitioner</artifactId>
+            <version>11.2.27</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>
+EOF
+
+# ===============================================================
+# ===============================================================
+# ===============================================================
+
+# Cria arquivo TopicPathPartitioner.java
+cat > ~/topic-path-partitioner/src/main/java/br/com/dio/connect/partitioner/TopicPathPartitioner.java << 'EOF'
+package br.com.dio.connect.partitioner;
+
+import io.confluent.connect.storage.partitioner.DefaultPartitioner;
+
+public class TopicPathPartitioner<T> extends DefaultPartitioner<T> {
+
+    @Override
+    public String generatePartitionedPath(String topic, String encodedPartition) {
+        String topicPath = topic
+                .replaceFirst("^[^.]+\\.", "")
+                .replace('.', '/');
+
+        if (encodedPartition == null || encodedPartition.isEmpty()) {
+            return topicPath;
+        }
+
+        return topicPath + "/" + encodedPartition;
+    }
+}
+EOF
+
+# ===============================================================
+# ===============================================================
+# ===============================================================
+
+# Gera Plugin 
+cd ~/topic-path-partitioner
+
+docker run --rm \
+  -v $(pwd):/app \
+  -w /app \
+  maven:3.9-eclipse-temurin-17 \
+  mvn clean package
+
+# ===============================================================
+# ===============================================================
+# ===============================================================
+
+# Arquivo plugin .jar
+~/topic-path-partitioner/target/topic-path-partitioner-1.0.0.jar
