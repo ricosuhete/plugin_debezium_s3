@@ -1,11 +1,11 @@
-## Cria pastas
+## Bloco 1 - Cria pastas
 mkdir -p ~/topic-path-partitioner/src/main/java/br/com/dio/connect/partitioner
 
 # ===============================================================
 # ===============================================================
 # ===============================================================
 
-## Cria arquivo pom.xml
+## Bloco 2 - Cria arquivo pom.xml
 cat > ~/topic-path-partitioner/pom.xml << 'EOF'
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -51,7 +51,7 @@ EOF
 # ===============================================================
 # ===============================================================
 
-# Cria arquivo TopicPathPartitioner.java
+# Bloco 3 - Cria arquivo TopicPathPartitioner.java
 cat > ~/topic-path-partitioner/src/main/java/br/com/dio/connect/partitioner/TopicPathPartitioner.java << 'EOF'
 package br.com.dio.connect.partitioner;
 
@@ -78,7 +78,7 @@ EOF
 # ===============================================================
 # ===============================================================
 
-# Gera Plugin 
+# Bloco 4 - Gera Plugin 
 cd ~/topic-path-partitioner
 
 docker run --rm \
@@ -91,5 +91,5 @@ docker run --rm \
 # ===============================================================
 # ===============================================================
 
-# Arquivo plugin .jar
+# Arquivo do plugin .jar
 ~/topic-path-partitioner/target/topic-path-partitioner-1.0.0.jar
