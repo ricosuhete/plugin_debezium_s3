@@ -34,6 +34,8 @@ docker run --rm \
   maven:3.9-eclipse-temurin-17 \
   mvn clean package
 ````
+Abra o arquivo .txt e execute os blocos 1 de cada vez, o arquivo .jar se encontrará em <br>
+<b>`~/topic-path-partitioner/target/topic-path-partitioner-1.0.0.jar`</b>
 
 ## ⚙️ Configuração
 "partitioner.class": "br.com.dio.connect.partitioner.TopicPathPartitioner"
@@ -42,3 +44,6 @@ docker run --rm \
 Kafka Connect 3.x <br>
 Confluent S3 Sink Connector <br>
 Java 17+
+
+## Instrução de uso
+
