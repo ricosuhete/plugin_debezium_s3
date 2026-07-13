@@ -1,11 +1,37 @@
-## Bloco 1 - Cria pastas
+# ===============================================================
+# TopicPathPartitioner - Plugin Universal DIO
+# ===============================================================
+# Particionador customizado para o S3 Sink Connector que:
+#   - Transforma o nome do tópico Kafka em path hierárquico no S3
+#   - Remove o primeiro prefixo (antes do primeiro ponto)
+#   - Substitui pontos por barras
+#   - Delega a estratégia de particionamento para qualquer
+#     partitioner oficial da Confluent
+#
+# Exemplo (tópico: m01.inventory.customers):
+#   DefaultPartitioner   → inventory/customers/partition=0
+#   TimeBasedPartitioner → inventory/customers/year=2025/month=07/day=13/hour=10
+#   DailyPartitioner     → inventory/customers/year=2025/month=07/day=13
+#   HourlyPartitioner    → inventory/customers/year=2025/month=07/day=13/hour=10
+#   FieldPartitioner     → inventory/customers/tenant_id=cliente_a
+#
+# Configuração no conector:
+#   partitioner.class=br.com.dio.connect.partitioner.TopicPathPartitioner
+#   dio.partitioner.delegate=DefaultPartitioner  (opcional, padrão)
+# ===============================================================
+
+
+# ===============================================================
+# Bloco 1 - Cria pastas
+# ===============================================================
+
 mkdir -p ~/topic-path-partitioner/src/main/java/br/com/dio/connect/partitioner
 
+
 # ===============================================================
-# ===============================================================
+# Bloco 2 - Cria arquivo pom.xml
 # ===============================================================
 
-## Bloco 2 - Cria arquivo pom.xml
 cat > ~/topic-path-partitioner/pom.xml << 'EOF'
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -43,42 +69,292 @@ cat > ~/topic-path-partitioner/pom.xml << 'EOF'
             <version>11.2.27</version>
             <scope>provided</scope>
         </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.9</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>
 EOF
 
+
 # ===============================================================
-# ===============================================================
+# Bloco 3 - Cria arquivo TopicPathPartitioner.java
 # ===============================================================
 
-# Bloco 3 - Cria arquivo TopicPathPartitioner.java
 cat > ~/topic-path-partitioner/src/main/java/br/com/dio/connect/partitioner/TopicPathPartitioner.java << 'EOF'
 package br.com.dio.connect.partitioner;
 
+import io.confluent.connect.storage.partitioner.DailyPartitioner;
 import io.confluent.connect.storage.partitioner.DefaultPartitioner;
+import io.confluent.connect.storage.partitioner.FieldPartitioner;
+import io.confluent.connect.storage.partitioner.HourlyPartitioner;
+import io.confluent.connect.storage.partitioner.Partitioner;
+import io.confluent.connect.storage.partitioner.TimeBasedPartitioner;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.connect.sink.SinkRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public class TopicPathPartitioner<T> extends DefaultPartitioner<T> {
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Particionador universal da DIO para o S3 Sink Connector.
+ *
+ * Combina qualquer estratégia de particionamento oficial da Confluent
+ * com a transformação de path do tópico Kafka:
+ *   - Remove o primeiro prefixo (antes do primeiro ponto)
+ *   - Substitui pontos por barras
+ *
+ * Exemplos de resultado (tópico: m01.inventory.customers):
+ *   DefaultPartitioner   → inventory/customers/partition=0
+ *   TimeBasedPartitioner → inventory/customers/year=2025/month=07/day=13/hour=10
+ *   DailyPartitioner     → inventory/customers/year=2025/month=07/day=13
+ *   HourlyPartitioner    → inventory/customers/year=2025/month=07/day=13/hour=10
+ *   FieldPartitioner     → inventory/customers/tenant_id=cliente_a
+ *
+ * Configuração:
+ *   partitioner.class=br.com.dio.connect.partitioner.TopicPathPartitioner
+ *   dio.partitioner.delegate=DefaultPartitioner  (opcional, padrão)
+ *
+ * @version 1.0.0
+ */
+public class TopicPathPartitioner<T> implements Partitioner<T> {
+
+    private static final Logger log = LoggerFactory.getLogger(TopicPathPartitioner.class);
+
+    public static final String DELEGATE_CONFIG = "dio.partitioner.delegate";
+    public static final String DELEGATE_DEFAULT = "DefaultPartitioner";
+
+    private static final Map<String, Class<? extends Partitioner<?>>> DELEGATE_MAP;
+
+    static {
+        Map<String, Class<? extends Partitioner<?>>> map = new HashMap<>();
+        map.put("DefaultPartitioner", DefaultPartitioner.class);
+        map.put("TimeBasedPartitioner", TimeBasedPartitioner.class);
+        map.put("DailyPartitioner", DailyPartitioner.class);
+        map.put("HourlyPartitioner", HourlyPartitioner.class);
+        map.put("FieldPartitioner", FieldPartitioner.class);
+        DELEGATE_MAP = Collections.unmodifiableMap(map);
+    }
+
+    private Partitioner<T> delegate;
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void configure(Map<String, Object> config) {
+        if (config == null) {
+            throw new ConfigException(
+                    "TopicPathPartitioner",
+                    null,
+                    "A configuração não pode ser nula."
+            );
+        }
+
+        String delegateName = DELEGATE_DEFAULT;
+        Object rawValue = config.get(DELEGATE_CONFIG);
+
+        if (rawValue != null) {
+            if (rawValue instanceof String) {
+                String trimmed = ((String) rawValue).trim();
+                if (!trimmed.isEmpty()) {
+                    delegateName = trimmed;
+                }
+            } else {
+                log.warn(
+                        "[TopicPathPartitioner] O valor de '{}' não é uma string (tipo: {}). "
+                        + "Usando delegate padrão: '{}'.",
+                        DELEGATE_CONFIG,
+                        rawValue.getClass().getSimpleName(),
+                        DELEGATE_DEFAULT
+                );
+            }
+        }
+
+        log.info(
+                "[TopicPathPartitioner] Configurando com delegate: '{}'",
+                delegateName
+        );
+
+        Class<? extends Partitioner<?>> delegateClass = DELEGATE_MAP.get(delegateName);
+
+        if (delegateClass == null) {
+            String validValues = String.join(", ", DELEGATE_MAP.keySet());
+            log.error(
+                    "[TopicPathPartitioner] Delegate inválido: '{}'. Valores válidos: [{}]",
+                    delegateName,
+                    validValues
+            );
+            throw new ConfigException(
+                    DELEGATE_CONFIG,
+                    delegateName,
+                    "Delegate de particionamento inválido. Valores válidos: [" + validValues + "]"
+            );
+        }
+
+        try {
+            delegate = (Partitioner<T>) delegateClass.getDeclaredConstructor().newInstance();
+        } catch (Exception e) {
+            log.error(
+                    "[TopicPathPartitioner] Erro ao instanciar delegate '{}': {}",
+                    delegateName,
+                    e.getMessage(),
+                    e
+            );
+            throw new ConfigException(
+                    DELEGATE_CONFIG,
+                    delegateName,
+                    "Não foi possível instanciar o delegate de particionamento: " + e.getMessage()
+            );
+        }
+
+        try {
+            delegate.configure(config);
+            log.info(
+                    "[TopicPathPartitioner] Delegate '{}' configurado com sucesso.",
+                    delegateName
+            );
+        } catch (Exception e) {
+            log.error(
+                    "[TopicPathPartitioner] Erro ao configurar delegate '{}': {}. "
+                    + "Verifique se todos os parâmetros obrigatórios do delegate estão presentes "
+                    + "(ex: path.format, locale, timezone, partition.field.name).",
+                    delegateName,
+                    e.getMessage(),
+                    e
+            );
+            throw new ConfigException(
+                    DELEGATE_CONFIG,
+                    delegateName,
+                    "Erro ao configurar o delegate de particionamento. "
+                    + "Verifique os parâmetros obrigatórios do delegate selecionado: "
+                    + e.getMessage()
+            );
+        }
+    }
+
+    @Override
+    public String encodePartition(SinkRecord sinkRecord) {
+        if (delegate == null) {
+            log.error(
+                    "[TopicPathPartitioner] encodePartition() chamado antes de configure(). "
+                    + "O delegate não foi inicializado."
+            );
+            throw new IllegalStateException(
+                    "TopicPathPartitioner não foi configurado. "
+                    + "Verifique se configure() foi chamado antes de encodePartition()."
+            );
+        }
+
+        if (sinkRecord == null) {
+            log.warn(
+                    "[TopicPathPartitioner] encodePartition() recebeu sinkRecord nulo. "
+                    + "Retornando string vazia."
+            );
+            return "";
+        }
+
+        try {
+            String encoded = delegate.encodePartition(sinkRecord);
+
+            if (log.isTraceEnabled()) {
+                log.trace(
+                        "[TopicPathPartitioner] encodePartition para tópico '{}' partição {}: '{}'",
+                        sinkRecord.topic(),
+                        sinkRecord.kafkaPartition(),
+                        encoded
+                );
+            }
+
+            return encoded;
+
+        } catch (Exception e) {
+            log.error(
+                    "[TopicPathPartitioner] Erro em encodePartition() para tópico '{}' "
+                    + "partição {} offset {}: {}",
+                    sinkRecord.topic(),
+                    sinkRecord.kafkaPartition(),
+                    sinkRecord.kafkaOffset(),
+                    e.getMessage(),
+                    e
+            );
+            throw e;
+        }
+    }
 
     @Override
     public String generatePartitionedPath(String topic, String encodedPartition) {
-        String topicPath = topic
-                .replaceFirst("^[^.]+\\.", "")
-                .replace('.', '/');
-
-        if (encodedPartition == null || encodedPartition.isEmpty()) {
-            return topicPath;
+        if (topic == null || topic.isEmpty()) {
+            log.warn(
+                    "[TopicPathPartitioner] generatePartitionedPath() recebeu tópico nulo ou vazio. "
+                    + "Retornando encodedPartition diretamente: '{}'",
+                    encodedPartition
+            );
+            return encodedPartition != null ? encodedPartition : "";
         }
 
-        return topicPath + "/" + encodedPartition;
+        String topicPath;
+        try {
+            topicPath = topic
+                    .replaceFirst("^[^.]+\\.", "")
+                    .replace('.', '/');
+        } catch (Exception e) {
+            log.error(
+                    "[TopicPathPartitioner] Erro ao transformar tópico '{}' em path: {}. "
+                    + "Usando o nome do tópico original como fallback.",
+                    topic,
+                    e.getMessage(),
+                    e
+            );
+            topicPath = topic;
+        }
+
+        String result;
+        if (encodedPartition == null || encodedPartition.isEmpty()) {
+            result = topicPath;
+        } else {
+            result = topicPath + "/" + encodedPartition;
+        }
+
+        if (log.isDebugEnabled()) {
+            log.debug(
+                    "[TopicPathPartitioner] Tópico '{}' → path '{}' "
+                    + "(encodedPartition: '{}')",
+                    topic,
+                    result,
+                    encodedPartition
+            );
+        }
+
+        return result;
+    }
+
+    @Override
+    public List<T> partitionFields() {
+        if (delegate == null) {
+            log.warn(
+                    "[TopicPathPartitioner] partitionFields() chamado antes de configure(). "
+                    + "Retornando lista vazia."
+            );
+            return Collections.emptyList();
+        }
+
+        return delegate.partitionFields();
     }
 }
 EOF
 
+
 # ===============================================================
-# ===============================================================
+# Bloco 4 - Gera Plugin
 # ===============================================================
 
-# Bloco 4 - Gera Plugin 
 cd ~/topic-path-partitioner
 
 docker run --rm \
@@ -87,9 +363,56 @@ docker run --rm \
   maven:3.9-eclipse-temurin-17 \
   mvn clean package
 
-# ===============================================================
-# ===============================================================
-# ===============================================================
 
-# Arquivo do plugin .jar
-~/topic-path-partitioner/target/topic-path-partitioner-1.0.0.jar
+# ===============================================================
+# Bloco 5 - Arquivo do plugin .jar gerado
+# ===============================================================
+# ~/topic-path-partitioner/target/topic-path-partitioner-1.0.0.jar
+#
+# Copie para o diretório de plugins do Kafka Connect:
+#
+# cp ~/topic-path-partitioner/target/topic-path-partitioner-1.0.0.jar \
+#   /usr/share/confluent-hub-components/confluentinc-kafka-connect-s3/lib/
+#
+# Reinicie os workers do Kafka Connect após copiar.
+
+
+# ===============================================================
+# Exemplos de uso no conector
+# ===============================================================
+#
+# 1) Com DefaultPartitioner (padrão, não precisa informar delegate):
+#    "partitioner.class": "br.com.dio.connect.partitioner.TopicPathPartitioner"
+#    Resultado: inventory/customers/partition=0
+#
+# 2) Com TimeBasedPartitioner:
+#    "partitioner.class": "br.com.dio.connect.partitioner.TopicPathPartitioner",
+#    "dio.partitioner.delegate": "TimeBasedPartitioner",
+#    "path.format": "'year'=YYYY/'month'=MM/'day'=dd/'hour'=HH",
+#    "partition.duration.ms": "3600000",
+#    "locale": "en_US",
+#    "timezone": "America/Sao_Paulo",
+#    "timestamp.extractor": "Record"
+#    Resultado: inventory/customers/year=2025/month=07/day=13/hour=10
+#
+# 3) Com DailyPartitioner:
+#    "partitioner.class": "br.com.dio.connect.partitioner.TopicPathPartitioner",
+#    "dio.partitioner.delegate": "DailyPartitioner",
+#    "locale": "en_US",
+#    "timezone": "America/Sao_Paulo",
+#    "timestamp.extractor": "Record"
+#    Resultado: inventory/customers/year=2025/month=07/day=13
+#
+# 4) Com HourlyPartitioner:
+#    "partitioner.class": "br.com.dio.connect.partitioner.TopicPathPartitioner",
+#    "dio.partitioner.delegate": "HourlyPartitioner",
+#    "locale": "en_US",
+#    "timezone": "America/Sao_Paulo",
+#    "timestamp.extractor": "Record"
+#    Resultado: inventory/customers/year=2025/month=07/day=13/hour=10
+#
+# 5) Com FieldPartitioner:
+#    "partitioner.class": "br.com.dio.connect.partitioner.TopicPathPartitioner",
+#    "dio.partitioner.delegate": "FieldPartitioner",
+#    "partition.field.name": "tenant_id"
+#    Resultado: inventory/customers/tenant_id=cliente_a
