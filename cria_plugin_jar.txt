@@ -121,8 +121,6 @@ import java.util.Map;
  * Configuração:
  *   partitioner.class=br.com.dio.connect.partitioner.TopicPathPartitioner
  *   dio.partitioner.delegate=DefaultPartitioner  (opcional, padrão)
- *
- * @version 1.0.0
  */
 public class TopicPathPartitioner<T> implements Partitioner<T> {
 
@@ -132,193 +130,102 @@ public class TopicPathPartitioner<T> implements Partitioner<T> {
     public static final String DELEGATE_DEFAULT = "DefaultPartitioner";
 
     private Partitioner<T> delegate;
+    private String delegateName;
 
     @Override
     public void configure(Map<String, Object> config) {
         if (config == null) {
-            throw new ConfigException(
-                    "TopicPathPartitioner",
-                    null,
-                    "A configuração não pode ser nula."
-            );
+            throw new ConfigException("TopicPathPartitioner", null, "A configuração não pode ser nula.");
         }
 
-        String delegateName = DELEGATE_DEFAULT;
+        this.delegateName = DELEGATE_DEFAULT;
         Object rawValue = config.get(DELEGATE_CONFIG);
 
-        if (rawValue != null) {
-            if (rawValue instanceof String) {
-                String trimmed = ((String) rawValue).trim();
-                if (!trimmed.isEmpty()) {
-                    delegateName = trimmed;
-                }
-            } else {
-                log.warn(
-                        "[TopicPathPartitioner] O valor de '{}' não é uma string (tipo: {}). "
-                        + "Usando delegate padrão: '{}'.",
-                        DELEGATE_CONFIG,
-                        rawValue.getClass().getSimpleName(),
-                        DELEGATE_DEFAULT
-                );
+        if (rawValue instanceof String) {
+            String trimmed = ((String) rawValue).trim();
+            if (!trimmed.isEmpty()) {
+                this.delegateName = trimmed;
             }
         }
 
-        log.info(
-                "[TopicPathPartitioner] Configurando com delegate: '{}'",
-                delegateName
-        );
+        log.info("[TopicPathPartitioner] Inicializando com delegate: '{}'", delegateName);
 
         this.delegate = createDelegate(delegateName);
 
         try {
             this.delegate.configure(config);
-            log.info(
-                    "[TopicPathPartitioner] Delegate '{}' configurado com sucesso.",
-                    delegateName
-            );
+            log.info("[TopicPathPartitioner] Delegate '{}' configurado com sucesso.", delegateName);
         } catch (Exception e) {
-            log.error(
-                    "[TopicPathPartitioner] Erro ao configurar delegate '{}': {}. "
-                    + "Verifique se todos os parâmetros obrigatórios do delegate estão presentes "
-                    + "(ex: path.format, locale, timezone, partition.field.name).",
-                    delegateName,
-                    e.getMessage(),
-                    e
-            );
+            log.error("[TopicPathPartitioner] Erro ao configurar delegate '{}': {}", delegateName, e.getMessage(), e);
             throw new ConfigException(
-                    DELEGATE_CONFIG,
-                    delegateName,
-                    "Erro ao configurar o delegate de particionamento. "
-                    + "Verifique os parâmetros obrigatórios do delegate selecionado: "
-                    + e.getMessage()
+                DELEGATE_CONFIG,
+                delegateName,
+                "Erro ao configurar o delegate: " + e.getMessage()
             );
         }
     }
 
     @SuppressWarnings("unchecked")
-    private Partitioner<T> createDelegate(String delegateName) {
-        try {
-            switch (delegateName) {
-                case "DefaultPartitioner":
-                    return (Partitioner<T>) new DefaultPartitioner<>();
-
-                case "TimeBasedPartitioner":
-                    return (Partitioner<T>) new TimeBasedPartitioner<>();
-
-                case "DailyPartitioner":
-                    return (Partitioner<T>) new DailyPartitioner<>();
-
-                case "HourlyPartitioner":
-                    return (Partitioner<T>) new HourlyPartitioner<>();
-
-                case "FieldPartitioner":
-                    return (Partitioner<T>) new FieldPartitioner<>();
-
-                default:
-                    log.error(
-                            "[TopicPathPartitioner] Delegate inválido: '{}'. "
-                            + "Valores válidos: [DefaultPartitioner, TimeBasedPartitioner, DailyPartitioner, HourlyPartitioner, FieldPartitioner]",
-                            delegateName
-                    );
-                    throw new ConfigException(
-                            DELEGATE_CONFIG,
-                            delegateName,
-                            "Delegate de particionamento inválido. Valores válidos: "
-                            + "[DefaultPartitioner, TimeBasedPartitioner, DailyPartitioner, HourlyPartitioner, FieldPartitioner]"
-                    );
-            }
-        } catch (ConfigException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error(
-                    "[TopicPathPartitioner] Erro ao instanciar delegate '{}': {}",
-                    delegateName,
-                    e.getMessage(),
-                    e
-            );
-            throw new ConfigException(
+    private Partitioner<T> createDelegate(String name) {
+        switch (name) {
+            case "DefaultPartitioner":
+                return (Partitioner<T>) new DefaultPartitioner<>();
+            case "TimeBasedPartitioner":
+                return (Partitioner<T>) new TimeBasedPartitioner<>();
+            case "DailyPartitioner":
+                return (Partitioner<T>) new DailyPartitioner<>();
+            case "HourlyPartitioner":
+                return (Partitioner<T>) new HourlyPartitioner<>();
+            case "FieldPartitioner":
+                return (Partitioner<T>) new FieldPartitioner<>();
+            default:
+                throw new ConfigException(
                     DELEGATE_CONFIG,
-                    delegateName,
-                    "Não foi possível instanciar o delegate de particionamento: " + e.getMessage()
-            );
+                    name,
+                    "Delegate inválido. Valores válidos: [DefaultPartitioner, TimeBasedPartitioner, DailyPartitioner, HourlyPartitioner, FieldPartitioner]"
+                );
+        }
+    }
+
+    private void ensureConfigured() {
+        if (delegate == null) {
+            throw new IllegalStateException("TopicPathPartitioner não foi configurado. Chame configure() primeiro.");
         }
     }
 
     @Override
     public String encodePartition(SinkRecord sinkRecord) {
-        if (delegate == null) {
-            log.error(
-                    "[TopicPathPartitioner] encodePartition() chamado antes de configure(). "
-                    + "O delegate não foi inicializado."
-            );
-            throw new IllegalStateException(
-                    "TopicPathPartitioner não foi configurado. "
-                    + "Verifique se configure() foi chamado antes de encodePartition()."
-            );
-        }
-
+        ensureConfigured();
         if (sinkRecord == null) {
-            log.warn(
-                    "[TopicPathPartitioner] encodePartition() recebeu sinkRecord nulo. "
-                    + "Retornando string vazia."
-            );
             return "";
         }
+        return delegate.encodePartition(sinkRecord);
+    }
 
-        try {
-            String encoded = delegate.encodePartition(sinkRecord);
-
-            if (log.isTraceEnabled()) {
-                log.trace(
-                        "[TopicPathPartitioner] encodePartition para tópico '{}' partição {}: '{}'",
-                        sinkRecord.topic(),
-                        sinkRecord.kafkaPartition(),
-                        encoded
-                );
-            }
-
-            return encoded;
-
-        } catch (Exception e) {
-            log.error(
-                    "[TopicPathPartitioner] Erro em encodePartition() para tópico '{}' "
-                    + "partição {} offset {}: {}",
-                    sinkRecord.topic(),
-                    sinkRecord.kafkaPartition(),
-                    sinkRecord.kafkaOffset(),
-                    e.getMessage(),
-                    e
-            );
-            throw e;
+    /**
+     * ✅ CRÍTICO: Sobrecarga exigida por algumas versões da API Confluent.
+     * Sem este método, ocorre AbstractMethodError em runtime.
+     */
+    @Override
+    public String encodePartition(SinkRecord sinkRecord, long nowInMillis) {
+        ensureConfigured();
+        if (sinkRecord == null) {
+            return "";
         }
+        return delegate.encodePartition(sinkRecord, nowInMillis);
     }
 
     @Override
     public String generatePartitionedPath(String topic, String encodedPartition) {
         if (topic == null || topic.isEmpty()) {
-            log.warn(
-                    "[TopicPathPartitioner] generatePartitionedPath() recebeu tópico nulo ou vazio. "
-                    + "Retornando encodedPartition diretamente: '{}'",
-                    encodedPartition
-            );
+            log.warn("[TopicPathPartitioner] Tópico nulo ou vazio recebido.");
             return encodedPartition != null ? encodedPartition : "";
         }
 
-        String topicPath;
-        try {
-            topicPath = topic
-                    .replaceFirst("^[^.]+\\.", "")
-                    .replace('.', '/');
-        } catch (Exception e) {
-            log.error(
-                    "[TopicPathPartitioner] Erro ao transformar tópico '{}' em path: {}. "
-                    + "Usando o nome do tópico original como fallback.",
-                    topic,
-                    e.getMessage(),
-                    e
-            );
-            topicPath = topic;
-        }
+        // Remove prefixo (ex: "my_dio02.inventory.customers" → "inventory/customers")
+        String topicPath = topic
+            .replaceFirst("^[^.]+\\.", "")
+            .replace('.', '/');
 
         String result;
         if (encodedPartition == null || encodedPartition.isEmpty()) {
@@ -328,13 +235,7 @@ public class TopicPathPartitioner<T> implements Partitioner<T> {
         }
 
         if (log.isDebugEnabled()) {
-            log.debug(
-                    "[TopicPathPartitioner] Tópico '{}' → path '{}' "
-                    + "(encodedPartition: '{}')",
-                    topic,
-                    result,
-                    encodedPartition
-            );
+            log.debug("[TopicPathPartitioner] '{}' → '{}' (delegate: {})", topic, result, delegateName);
         }
 
         return result;
@@ -343,18 +244,12 @@ public class TopicPathPartitioner<T> implements Partitioner<T> {
     @Override
     public List<T> partitionFields() {
         if (delegate == null) {
-            log.warn(
-                    "[TopicPathPartitioner] partitionFields() chamado antes de configure(). "
-                    + "Retornando lista vazia."
-            );
             return Collections.emptyList();
         }
-
         return delegate.partitionFields();
     }
 }
 EOF
-
 
 # ===============================================================
 # Bloco 4 - Gera Plugin
