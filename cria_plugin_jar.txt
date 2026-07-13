@@ -100,7 +100,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -132,22 +131,9 @@ public class TopicPathPartitioner<T> implements Partitioner<T> {
     public static final String DELEGATE_CONFIG = "dio.partitioner.delegate";
     public static final String DELEGATE_DEFAULT = "DefaultPartitioner";
 
-    private static final Map<String, Class<? extends Partitioner<?>>> DELEGATE_MAP;
-
-    static {
-        Map<String, Class<? extends Partitioner<?>>> map = new HashMap<>();
-        map.put("DefaultPartitioner", DefaultPartitioner.class);
-        map.put("TimeBasedPartitioner", TimeBasedPartitioner.class);
-        map.put("DailyPartitioner", DailyPartitioner.class);
-        map.put("HourlyPartitioner", HourlyPartitioner.class);
-        map.put("FieldPartitioner", FieldPartitioner.class);
-        DELEGATE_MAP = Collections.unmodifiableMap(map);
-    }
-
     private Partitioner<T> delegate;
 
     @Override
-    @SuppressWarnings("unchecked")
     public void configure(Map<String, Object> config) {
         if (config == null) {
             throw new ConfigException(
@@ -182,40 +168,10 @@ public class TopicPathPartitioner<T> implements Partitioner<T> {
                 delegateName
         );
 
-        Class<? extends Partitioner<?>> delegateClass = DELEGATE_MAP.get(delegateName);
-
-        if (delegateClass == null) {
-            String validValues = String.join(", ", DELEGATE_MAP.keySet());
-            log.error(
-                    "[TopicPathPartitioner] Delegate inválido: '{}'. Valores válidos: [{}]",
-                    delegateName,
-                    validValues
-            );
-            throw new ConfigException(
-                    DELEGATE_CONFIG,
-                    delegateName,
-                    "Delegate de particionamento inválido. Valores válidos: [" + validValues + "]"
-            );
-        }
+        this.delegate = createDelegate(delegateName);
 
         try {
-            delegate = (Partitioner<T>) delegateClass.getDeclaredConstructor().newInstance();
-        } catch (Exception e) {
-            log.error(
-                    "[TopicPathPartitioner] Erro ao instanciar delegate '{}': {}",
-                    delegateName,
-                    e.getMessage(),
-                    e
-            );
-            throw new ConfigException(
-                    DELEGATE_CONFIG,
-                    delegateName,
-                    "Não foi possível instanciar o delegate de particionamento: " + e.getMessage()
-            );
-        }
-
-        try {
-            delegate.configure(config);
+            this.delegate.configure(config);
             log.info(
                     "[TopicPathPartitioner] Delegate '{}' configurado com sucesso.",
                     delegateName
@@ -235,6 +191,55 @@ public class TopicPathPartitioner<T> implements Partitioner<T> {
                     "Erro ao configurar o delegate de particionamento. "
                     + "Verifique os parâmetros obrigatórios do delegate selecionado: "
                     + e.getMessage()
+            );
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Partitioner<T> createDelegate(String delegateName) {
+        try {
+            switch (delegateName) {
+                case "DefaultPartitioner":
+                    return (Partitioner<T>) new DefaultPartitioner<>();
+
+                case "TimeBasedPartitioner":
+                    return (Partitioner<T>) new TimeBasedPartitioner<>();
+
+                case "DailyPartitioner":
+                    return (Partitioner<T>) new DailyPartitioner<>();
+
+                case "HourlyPartitioner":
+                    return (Partitioner<T>) new HourlyPartitioner<>();
+
+                case "FieldPartitioner":
+                    return (Partitioner<T>) new FieldPartitioner<>();
+
+                default:
+                    log.error(
+                            "[TopicPathPartitioner] Delegate inválido: '{}'. "
+                            + "Valores válidos: [DefaultPartitioner, TimeBasedPartitioner, DailyPartitioner, HourlyPartitioner, FieldPartitioner]",
+                            delegateName
+                    );
+                    throw new ConfigException(
+                            DELEGATE_CONFIG,
+                            delegateName,
+                            "Delegate de particionamento inválido. Valores válidos: "
+                            + "[DefaultPartitioner, TimeBasedPartitioner, DailyPartitioner, HourlyPartitioner, FieldPartitioner]"
+                    );
+            }
+        } catch (ConfigException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error(
+                    "[TopicPathPartitioner] Erro ao instanciar delegate '{}': {}",
+                    delegateName,
+                    e.getMessage(),
+                    e
+            );
+            throw new ConfigException(
+                    DELEGATE_CONFIG,
+                    delegateName,
+                    "Não foi possível instanciar o delegate de particionamento: " + e.getMessage()
             );
         }
     }
